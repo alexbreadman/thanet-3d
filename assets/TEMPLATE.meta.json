@@ -1,0 +1,17 @@
+{
+  "id": "margate-harbour-arm",
+  "name": "Margate Harbour Arm",
+  "kind": "place",
+  "captured": "2026-09-06",
+  "capture_method": "phone-video",
+  "location": { "lat": 51.3897, "lon": 1.3799, "crs": "EPSG:4326" },
+  "heading_deg": 0,
+  "units": "metres",
+  "outputs": {
+    "splat": "splats/margate-harbour-arm.spz",
+    "mesh": "models/margate-harbour-arm.glb"
+  },
+  "license": "CC-BY-4.0",
+  "source": "own capture",
+  "twin_id": null
+}

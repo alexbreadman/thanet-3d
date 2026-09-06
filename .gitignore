@@ -1,0 +1,16 @@
+# Raw captures live on external storage / LFS — never plain git
+assets/captures/**
+!assets/captures/.gitkeep
+
+# Unreal derived data — the project must rebuild from assets/ + config
+unreal/**/Binaries/
+unreal/**/Intermediate/
+unreal/**/DerivedDataCache/
+unreal/**/Saved/
+unreal/**/.vs/
+
+# OS noise
+.DS_Store
+
+# generated tile output: rebuild with pigs pipeline 11+12; shipped via GitHub releases
+assets/geo/thanet-tiles/

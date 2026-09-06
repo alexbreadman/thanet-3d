@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Isle of Thanet — LOD tile viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1116; }
+  #hud { position: fixed; top: 10px; left: 10px; color: #cfd8e3;
+         font: 12px/1.5 ui-monospace, monospace; background: #0008;
+         padding: 8px 10px; border-radius: 6px; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="hud">loading index…</div>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
+<script type="module">
+import * as THREE from 'three';
+
+// serve from the thanet-3d root:  python3 -m http.server  → /web/viewer.html
+const TILES = '../assets/geo/thanet-tiles';
+const hud = document.getElementById('hud');
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9db8cc);
+scene.fog = new THREE.Fog(0x9db8cc, 6000, 26000);
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 2, 60000);
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+scene.add(new THREE.HemisphereLight(0xcfe4ff, 0x54503f, 1.1));
+const sun = new THREE.DirectionalLight(0xfff2dd, 2.2);
+sun.position.set(-0.55, 0.8, -0.3);
+scene.add(sun);
+
+// ------------------------------------------------------- minimal GLB reader
+// Reads exactly what pipeline/11_export_web_tiles.py writes: one node per
+// primitive, POSITION (+ optional NORMAL) f32, u32 indices, baseColorFactor.
+async function loadGLB(url) {
+  const buf = await (await fetch(url)).arrayBuffer();
+  const dv = new DataView(buf);
+  if (dv.getUint32(0, true) !== 0x46546C67) throw new Error('not glb: ' + url);
+  let off = 12, json = null, bin = null;
+  while (off < buf.byteLength) {
+    const len = dv.getUint32(off, true), type = dv.getUint32(off + 4, true);
+    const chunk = buf.slice(off + 8, off + 8 + len);
+    if (type === 0x4E4F534A) json = JSON.parse(new TextDecoder().decode(chunk));
+    else bin = chunk;
+    off += 8 + len;
+  }
+  const group = new THREE.Group();
+  for (const mesh of json.meshes) {
+    const p = mesh.primitives[0];
+    const geo = new THREE.BufferGeometry();
+    const acc = (i) => {
+      const a = json.accessors[i], v = json.bufferViews[a.bufferView];
+      const n = a.type === 'VEC3' ? 3 : 1;
+      const Arr = a.componentType === 5126 ? Float32Array : Uint32Array;
+      return new Arr(bin, v.byteOffset || 0, a.count * n);
+    };
+    geo.setAttribute('position', new THREE.BufferAttribute(acc(p.attributes.POSITION), 3));
+    if (p.attributes.NORMAL !== undefined)
+      geo.setAttribute('normal', new THREE.BufferAttribute(acc(p.attributes.NORMAL), 3));
+    geo.setIndex(new THREE.BufferAttribute(acc(p.indices), 1));
+    const col = json.materials[p.material].pbrMetallicRoughness.baseColorFactor;
+    const mat = new THREE.MeshLambertMaterial({ color: new THREE.Color(col[0], col[1], col[2]) });
+    if (p.attributes.COLOR_0 !== undefined) {
+      geo.setAttribute('color', new THREE.BufferAttribute(acc(p.attributes.COLOR_0), 3));
+      mat.vertexColors = true;
+    }
+    if (p.attributes.NORMAL === undefined) { geo.computeVertexNormals(); mat.flatShading = true; }
+    group.add(new THREE.Mesh(geo, mat));
+  }
+  return group;
+}
+
+// ------------------------------------------------------------- tile manager
+const index = await (await fetch(`${TILES}/index.json`)).json();
+const T = index.tile_m, X_MIN = Math.min(...index.tiles.map(t => t.x));
+const center = (t) => new THREE.Vector3((t.x - X_MIN + 0.5) * T, 0, -(t.y + 0.5) * T);
+const LOD_DIST = [1400, 4200, Infinity];
+const cache = new Map();   // key -> {want, shown, groups: Map(lod->group|`loading`)}
+for (const t of index.tiles) cache.set(`${t.x}_${t.y}`, { t, c: center(t), groups: new Map(), shown: -1 });
+
+// water along the old Wantsum + the sea
+const water = new THREE.Mesh(
+  new THREE.PlaneGeometry(90000, 90000),
+  new THREE.MeshLambertMaterial({ color: 0x3a6a8a, transparent: true, opacity: 0.92 }));
+water.rotation.x = -Math.PI / 2;
+water.position.set((index.tiles.length ? 16 : 0) * T, index.water_level, -5500);
+scene.add(water);
+
+let inflight = 0;
+async function ensure(entry, lod) {
+  if (entry.groups.has(lod) || inflight > 30) return;
+  inflight++;
+  entry.groups.set(lod, 'loading');
+  try {
+    const g = await loadGLB(`${TILES}/lod${lod}/t${entry.t.x}_${entry.t.y}.glb`);
+    g.visible = false;
+    scene.add(g);
+    entry.groups.set(lod, g);
+  } catch { entry.groups.delete(lod); }
+  inflight--;
+}
+
+function updateTiles() {
+  const cp = camera.position;
+  for (const entry of cache.values()) {
+    const d = entry.c.distanceTo(cp);
+    let want = LOD_DIST.findIndex(x => d < x);
+    ensure(entry, want);
+    // drop heavy LODs once we are far away again
+    if (d > 2.2 * LOD_DIST[0] && entry.groups.get(0) instanceof THREE.Group) {
+      scene.remove(entry.groups.get(0)); entry.groups.delete(0);
+    }
+    // show the best loaded lod ≥ wanted detail, hide the rest
+    let best = -1;
+    for (let l = want; l < 3; l++)
+      if (entry.groups.get(l) instanceof THREE.Group) { best = l; break; }
+    // nothing loaded yet -> grab the tiny lod2 too, so there is never a hole
+    if (best === -1 && want < 2) ensure(entry, 2);
+    for (const [l, g] of entry.groups)
+      if (g instanceof THREE.Group) g.visible = (l === best);
+    entry.shown = best;
+  }
+}
+setInterval(updateTiles, 250);
+
+// --------------------------------------------------------------- controls
+const focus = new THREE.Vector3(9700, 0, -5600);
+let dist = 14000, yaw = 0.0, pitch = 0.9;
+// deep-link: #x,z,dist[,yaw,pitch]  e.g. viewer.html#13050,-9450,900,2.4,0.35
+if (location.hash.length > 1) {
+  const [hx, hz, hd, hy, hp] = location.hash.slice(1).split(',').map(Number);
+  if (!isNaN(hx)) focus.x = hx;
+  if (!isNaN(hz)) focus.z = hz;
+  if (!isNaN(hd)) dist = hd;
+  if (!isNaN(hy)) yaw = hy;
+  if (!isNaN(hp)) pitch = hp;
+}
+const place = () => {
+  camera.position.set(
+    focus.x + dist * Math.cos(pitch) * Math.sin(yaw),
+    focus.y + dist * Math.sin(pitch),
+    focus.z + dist * Math.cos(pitch) * Math.cos(yaw));
+  camera.lookAt(focus);
+};
+place();
+let drag = null;
+addEventListener('mousedown', e => drag = { x: e.clientX, y: e.clientY, b: e.button, f: focus.clone(), yaw, pitch });
+addEventListener('mouseup', () => drag = null);
+addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('mousemove', e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (drag.b === 0) {
+    yaw = drag.yaw - dx * 0.005;
+    pitch = Math.min(1.5, Math.max(0.05, drag.pitch + dy * 0.005));
+  } else {
+    const s = dist * 0.0012;
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
+    const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    focus.copy(drag.f).addScaledVector(right, -dx * s).addScaledVector(fwd, -dy * s);
+  }
+  place();
+});
+addEventListener('wheel', e => { dist = Math.min(30000, Math.max(60, dist * (1 + e.deltaY * 0.001))); place(); });
+
+// ---------------------------------------------------------- place labels
+const tileSet = new Set(index.tiles.map(t => `${t.x}_${t.y}`));
+const labels = [];
+try {
+  const raw = await (await fetch(`${TILES}/labels.json`)).json();
+  for (const l of raw) {
+    const tx = Math.floor(l.x / T) + X_MIN, ty = Math.floor(-l.z / T);
+    if (!tileSet.has(`${tx}_${ty}`)) continue;      // label sits on a culled tile
+    const div = document.createElement('div');
+    div.textContent = l.name;
+    const big = l.kind === 'town';
+    div.style.cssText = `position:fixed;color:#fff;pointer-events:none;
+      font:${big ? '600 15px' : '12px'} system-ui;text-shadow:0 1px 3px #000c;
+      transform:translate(-50%,-50%);display:none`;
+    document.body.appendChild(div);
+    labels.push({ pos: new THREE.Vector3(l.x, 30, l.z), div, big });
+  }
+} catch {}
+const v = new THREE.Vector3();
+function updateLabels() {
+  for (const l of labels) {
+    v.copy(l.pos).project(camera);
+    const d = camera.position.distanceTo(l.pos);
+    const show = v.z < 1 && Math.abs(v.x) < 1 && Math.abs(v.y) < 1
+      && d < (l.big ? 30000 : 9000) && d > 700;
+    l.div.style.display = show ? 'block' : 'none';
+    if (show) {
+      l.div.style.left = (v.x * 0.5 + 0.5) * innerWidth + 'px';
+      l.div.style.top = (-v.y * 0.5 + 0.5) * innerHeight + 'px';
+    }
+  }
+}
+
+renderer.setAnimationLoop(() => {
+  renderer.render(scene, camera);
+  updateLabels();
+  let shown = 0, l0 = 0;
+  for (const e of cache.values()) { if (e.shown >= 0) shown++; if (e.shown === 0) l0++; }
+  hud.textContent = `Isle of Thanet — ${index.tiles.length} tiles, ${shown} visible, ${l0} at LOD0 | drag orbit · right-drag pan · wheel zoom`;
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "margate-slice",
+  "crs": "EPSG:27700 (British National Grid), shifted to slice origin",
+  "origin_bng": {
+    "E": 634216,
+    "N": 169692
+  },
+  "extent_m": [
+    1536,
+    1536
+  ],
+  "axes": "glTF Y-up right-handed: x=east, y=ODN metres, z=-north",
+  "source": "vibe/pigs pipeline data/out (EA LIDAR + OSM + OS OpenMap)",
+  "files": [
+    "terrain.glb",
+    "buildings.glb",
+    "roads.glb"
+  ]
+}
