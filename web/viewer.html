@@ -21,6 +21,7 @@ const TILES = '../assets/geo/thanet-tiles';
 const hud = document.getElementById('hud');
 
 const scene = new THREE.Scene();
+window._scene = scene;
 scene.background = new THREE.Color(0x9db8cc);
 scene.fog = new THREE.Fog(0x9db8cc, 6000, 26000);
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 2, 60000);
@@ -43,7 +44,7 @@ scene.add(sun);
 // Reads exactly what pipeline/11_export_web_tiles.py writes: one node per
 // primitive, POSITION (+ optional NORMAL) f32, u32 indices, baseColorFactor.
 async function loadGLB(url) {
-  const buf = await (await fetch(url)).arrayBuffer();
+  const buf = await (await fetch(url, { cache: 'no-cache' })).arrayBuffer();
   const dv = new DataView(buf);
   if (dv.getUint32(0, true) !== 0x46546C67) throw new Error('not glb: ' + url);
   let off = 12, json = null, bin = null;
