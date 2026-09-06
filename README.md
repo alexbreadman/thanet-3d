@@ -140,3 +140,19 @@ Unreal joins as a consumer, in this order — each step useful on its own:
 
 *Part of the public.charity project (P-2026-001) — free, open, given away.
 Assets are CC-BY-4.0 unless a sidecar says otherwise; code is Apache-2.0.*
+
+## Unreal ↔ Claude (MCP)
+
+To let Claude drive the Unreal editor directly, the bridge runs **on the
+machine with Unreal** (the Shadow PC):
+
+1. Install [Claude Code](https://claude.com/claude-code) on that machine and
+   sign in — a session there can build/import/screenshot Unreal natively.
+2. For editor-level control, add an Unreal MCP server (e.g.
+   [chongdashu/unreal-mcp](https://github.com/chongdashu/unreal-mcp)): install
+   its UnrealMCP plugin into the project, then register its Python MCP server
+   with `claude mcp add`. Claude can then spawn actors, edit the level and
+   take screenshots through the running editor.
+3. The playable kit for this project ships as a GitHub release
+   (`thanet-unreal-kit.zip`) — unzip and run `unreal/import_thanet.py` in the
+   UE Python console to build the Thanet level; MCP is optional on top.
